@@ -44,19 +44,22 @@
 ## Phase 7: 部署
 - [x] 代码推送到 GitHub → https://github.com/teamo-lab/teamo-v1
 - [x] 服务器部署（美国硅谷 lhins-28jskt2z / 49.51.47.101）→ instance-manager:8902 + proxy:8901
-- [ ] 域名配置 + HTTPS（需审批：域名选择）
+- [ ] 域名配置 + HTTPS（teamoteam.com，待生产发布时配置）
 - [x] 冒烟测试通过 — 6/6 PASS ✅ 2026-03-15
+- [x] 前端集成 ModeSelector 到 teamo-frontend ✅ 2026-03-15
 
-## Phase 8: 生产环境 E2E 验证
-- [ ] Playwright 全流程验证
-- [ ] E2E 报告
-- [ ] 用户审批
+## Phase 8: 本地 E2E 验证
+- [x] 前端构建成功（nuxt build）✅ 2026-03-15
+- [x] Playwright 本地测试 — 6/6 PASS ✅ 2026-03-15
+- [x] 后端服务冒烟测试 — 6/6 PASS ✅ 2026-03-15
+- [ ] 用户审批发布到生产
 
 ## Phase 9: Dashboard & 可观测体系
-- [ ] 关键指标定义
-- [ ] Dashboard 搭建
+- [x] 关键指标定义 → [docs/09-dashboard/metrics.md](docs/09-dashboard/metrics.md)
+- [ ] Dashboard 搭建（待生产发布后接入 Grafana）
 - [ ] 部署验证
 
 ## Phase 10: 交付
-- [ ] 交付清单
+- [x] 交付清单 → [docs/10-delivery/delivery-checklist.md](docs/10-delivery/delivery-checklist.md)
+- [ ] 用户审批发布到生产
 - [ ] 用户签收
