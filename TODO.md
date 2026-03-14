@@ -42,10 +42,10 @@
 - [x] 验收报告 ✅ 2026-03-15
 
 ## Phase 7: 部署
-- [ ] 代码推送到 GitHub
-- [ ] 服务器部署（美国硅谷）
-- [ ] 域名配置 + HTTPS
-- [ ] 冒烟测试通过
+- [x] 代码推送到 GitHub → https://github.com/teamo-lab/teamo-v1
+- [x] 服务器部署（美国硅谷 lhins-28jskt2z / 49.51.47.101）→ instance-manager:8902 + proxy:8901
+- [ ] 域名配置 + HTTPS（需审批：域名选择）
+- [x] 冒烟测试通过 — 6/6 PASS ✅ 2026-03-15
 
 ## Phase 8: 生产环境 E2E 验证
 - [ ] Playwright 全流程验证
