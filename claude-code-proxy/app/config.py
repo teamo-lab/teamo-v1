@@ -11,6 +11,11 @@ class ProxyConfig:
             "INSTANCE_MANAGER_URL", "http://127.0.0.1:8900"
         )
     )
+    legacy_backend_url: str = field(
+        default_factory=lambda: os.getenv(
+            "LEGACY_BACKEND_URL", "http://43.159.4.84:59815"
+        )
+    )
     mongodb_uri: str = field(
         default_factory=lambda: os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     )

@@ -1,4 +1,8 @@
-"""Claude Code Proxy — routes requests between frontend and instance-manager."""
+"""Claude Code Proxy — routes requests between frontend and instance-manager.
+
+For claude_code mode: handles locally via instance-manager.
+For other modes (a2a, research, etc.): forwards to legacy wowchat-backend.
+"""
 
 import json
 import logging
@@ -18,38 +22,77 @@ logger = logging.getLogger(__name__)
 _tasks: dict = {}
 
 
+async def _forward_to_legacy(
+    path: str, body: dict, headers: dict, method: str = "POST"
+) -> dict:
+    """Forward a JSON request to legacy backend and return JSON response."""
+    fwd_headers = {k: v for k, v in headers.items()
+                   if k.lower() in ("authorization", "cookie", "content-type")}
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.request(
+            method,
+            f"{CONFIG.legacy_backend_url}{path}",
+            json=body,
+            headers=fwd_headers,
+        )
+        try:
+            return resp.json()
+        except Exception:
+            return {"code": -1, "message": f"Legacy backend error: {resp.status_code}"}
+
+
+async def _forward_stream_legacy(
+    path: str, body: dict, headers: dict
+) -> AsyncIterator[str]:
+    """Forward request to legacy backend and stream SSE response."""
+    fwd_headers = {k: v for k, v in headers.items()
+                   if k.lower() in ("authorization", "cookie", "content-type")}
+    try:
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(
+                "POST",
+                f"{CONFIG.legacy_backend_url}{path}",
+                json=body,
+                headers=fwd_headers,
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    yield line + "\n"
+    except httpx.HTTPError as exc:
+        logger.exception("Legacy stream error: %s", exc)
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+
 async def handle_ask_agents(
     user_id: str,
     query: str,
     mode: str,
     session_group_id: Optional[str] = None,
-    mcp_handler: Optional[Callable] = None,
+    headers: Optional[dict] = None,
 ) -> dict:
     """Route askAgents based on mode.
 
-    Returns dict with mcp_task_id (for claude_code) or delegates to mcp_handler.
+    claude_code → instance-manager; other modes → legacy backend.
     """
     if mode == "claude_code":
         return await _ask_claude_code(user_id, query, session_group_id)
     else:
-        # Delegate to old MCP engine (Research mode)
-        if mcp_handler:
-            return await mcp_handler(user_id, query, session_group_id)
-        return {"code": 0, "mcp_task_id": "", "result": {"error": "no_mcp_handler"}}
+        # Forward to legacy wowchat-backend
+        body = {"query": query, "mode": mode}
+        if session_group_id:
+            body["session_group_id"] = session_group_id
+        return await _forward_to_legacy(
+            "/api/engine/askAgents", body, headers or {}
+        )
 
 
 async def _ask_claude_code(
     user_id: str, query: str, session_group_id: Optional[str]
 ) -> dict:
-    """Forward prompt to instance-manager and return task_id."""
-    task_id = uuid.uuid4().hex[:16]
+    """Create a task entry and return task_id.
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{CONFIG.instance_manager_url}/api/instance/prompt",
-            json={"user_id": user_id, "prompt": query},
-        )
-        # We don't consume the stream here — askAgentsCheck will do that
+    Does NOT call instance-manager here — stream_check does the actual streaming.
+    """
+    task_id = uuid.uuid4().hex[:16]
 
     _tasks[task_id] = {
         "user_id": user_id,
@@ -59,19 +102,24 @@ async def _ask_claude_code(
         "created_at": datetime.utcnow().isoformat(),
     }
 
-    return {"code": 0, "mcp_task_id": task_id}
+    return {"code": 0, "result": {"mcp_task_id": task_id}}
 
 
 async def stream_check(
     task_id: str,
     mode: str,
-    mcp_stream_handler: Optional[Callable] = None,
+    headers: Optional[dict] = None,
+    body: Optional[dict] = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events for askAgentsCheck."""
     if mode != "claude_code":
-        if mcp_stream_handler:
-            async for line in mcp_stream_handler(task_id):
-                yield line
+        # Forward to legacy backend
+        async for line in _forward_stream_legacy(
+            "/api/engine/askAgentsCheck",
+            body or {"mcp_task_id": task_id, "mode": mode},
+            headers or {},
+        ):
+            yield line
         return
 
     task = _tasks.get(task_id)
@@ -105,13 +153,15 @@ async def handle_user_stop(
     task_id: str,
     user_id: str,
     mode: str,
-    mcp_stop_handler: Optional[Callable] = None,
+    headers: Optional[dict] = None,
 ) -> dict:
     """Stop a running task."""
     if mode != "claude_code":
-        if mcp_stop_handler:
-            return await mcp_stop_handler(task_id, user_id)
-        return {"code": 0}
+        return await _forward_to_legacy(
+            "/api/engine/askAgentsUserStop",
+            {"mcp_task_id": task_id, "mode": mode},
+            headers or {},
+        )
 
     task = _tasks.get(task_id)
     if not task:
@@ -137,6 +187,8 @@ async def get_instance_status(user_id: str) -> dict:
             resp = await client.get(
                 f"{CONFIG.instance_manager_url}/api/instance/status/{user_id}"
             )
-            return resp.json()
-    except httpx.HTTPError:
+            if resp.status_code == 200:
+                return resp.json()
+            return {"status": "stopped"}
+    except Exception:
         return {"status": "unknown"}
