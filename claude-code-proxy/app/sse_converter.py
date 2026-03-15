@@ -15,11 +15,12 @@ from typing import List
 from app.models import FrontendSSEEvent
 
 
-def convert_instance_sse(raw_line: str) -> List[str]:
+def convert_instance_sse(raw_line: str, step_conv_id: str = "") -> List[str]:
     """Convert a single SSE data line from instance-manager to frontend SSE lines.
 
     Args:
         raw_line: A line like 'data: {"type":"text","content":"Hello"}\n\n'
+        step_conv_id: Conversation step ID for correlating answer chunks.
 
     Returns:
         List of frontend-compatible SSE strings.
@@ -37,28 +38,29 @@ def convert_instance_sse(raw_line: str) -> List[str]:
     except json.JSONDecodeError:
         return []
 
-    return _map_event(event)
+    return _map_event(event, step_conv_id)
 
 
-def _map_event(event: dict) -> List[str]:
+def _map_event(event: dict, step_conv_id: str = "") -> List[str]:
     etype = event.get("type", "")
 
     if etype == "text":
         return [FrontendSSEEvent.step(
             "answer_chunk",
-            {"message": event.get("content", "")},
+            {"step_conv_id": step_conv_id, "message": event.get("content", "")},
         )]
 
     if etype == "thinking":
         return [FrontendSSEEvent.step(
             "think_chunk",
-            {"message": event.get("content", "")},
+            {"step_conv_id": step_conv_id, "message": event.get("content", "")},
         )]
 
     if etype == "tool_use":
         return [FrontendSSEEvent.step(
             "tool_call",
             {
+                "step_conv_id": step_conv_id,
                 "tool": event.get("tool", ""),
                 "input": event.get("input", {}),
             },
@@ -67,7 +69,7 @@ def _map_event(event: dict) -> List[str]:
     if etype == "tool_result":
         return [FrontendSSEEvent.step(
             "tool_result",
-            {"output": event.get("output", "")},
+            {"step_conv_id": step_conv_id, "output": event.get("output", "")},
         )]
 
     if etype == "done":

@@ -1,6 +1,7 @@
 # Teamo v1 — 开发 TODO
 
 > 由 Agent 自动维护，记录全流程进度。每个已完成项链接到 docs/ 下的验收文档。
+> Ralph Loop prd.json: [scripts/ralph/prd.json](scripts/ralph/prd.json)
 
 ## Phase 1: 需求收集与澄清
 - [x] 需求复述与澄清 → [docs/01-intake/requirements.md](docs/01-intake/requirements.md)
@@ -26,6 +27,7 @@
 - [x] 前端模式切换 PRD → [docs/04-prd/frontend-mode-switch.md](docs/04-prd/frontend-mode-switch.md)
 - [x] Credits 计费系统 PRD → [docs/04-prd/credits-billing.md](docs/04-prd/credits-billing.md)
 - [x] MVP 范围定义 → [docs/04-prd/mvp-scope.md](docs/04-prd/mvp-scope.md)
+- [x] Ralph Loop PRD 转换 → [scripts/ralph/prd.json](scripts/ralph/prd.json)
 - [x] 用户审批 PRD ✅ 2026-03-15
 
 ## Phase 5: 测试方案 & 用例设计
@@ -34,12 +36,32 @@
 - [x] 冒烟测试清单 → [docs/05-test-plan/smoke-tests.md](docs/05-test-plan/smoke-tests.md)
 - [x] 用户确认测试计划 ✅ 2026-03-15
 
-## Phase 6: 开发循环
-- [x] 基础模块开发（实例管理服务）→ [instance-manager/](instance-manager/) (9 tests passed)
-- [x] 核心模块开发（代理 API + 前端适配）→ [claude-code-proxy/](claude-code-proxy/) (13 tests passed) + [frontend-patch/](frontend-patch/)
-- [x] 辅助模块开发（Credits 计费）→ [credits-billing/](credits-billing/) (11 tests passed)
-- [x] 全量测试通过 — 33/33 tests passed ✅ 2026-03-15
-- [x] 验收报告 ✅ 2026-03-15
+## Phase 6: 开发循环（Ralph Loop 追踪）
+
+### 已完成 ✅
+- [x] US-001: Instance Manager 核心 API (create/prompt/status/destroy) — 9/9 tests ✅
+- [x] US-002: Claude Code Proxy 模式路由 + SSE 转换 — 10/13 tests (3个test断言问题) ✅
+- [x] US-003: 前端 ModeSelector 组件 ✅
+- [x] US-004: Credits 计费逻辑层 — 11/11 tests ✅
+- [x] US-005: 部署到美国服务器 (49.51.47.101:8902) ✅
+- [x] US-006: E2E 验证 "hi" → Claude 回复渲染到前端 ✅
+- [x] US-011: 停止任务功能 ✅
+
+### 未完成 ❌
+- [ ] US-007: 修复 Proxy 3个测试失败（test 断言格式不匹配）
+- [ ] US-008: MongoDB 对话历史持久化（零实现，需 motor/pymongo）
+- [ ] US-009: 每日计费定时任务（APScheduler，需集成到 proxy 服务启动）
+- [ ] US-010: 前端实例状态 + Credits 轮询（ModeSelector props 已就绪，缺数据获取）
+- [ ] US-012: 部署更新后的 proxy + billing 到生产（依赖 US-008, US-009）
+
+### 真实测试状态
+| 模块 | 通过 | 失败 | 状态 |
+|------|------|------|------|
+| instance-manager | 9 | 0 | ✅ 100% |
+| claude-code-proxy | 10 | 3 | ⚠️ 77% (test断言问题) |
+| credits-billing | 11 | 0 | ✅ 100% |
+| E2E (Playwright) | 6 | 0 | ✅ 100% |
+| **合计** | **36** | **3** | **⚠️ 92%** |
 
 ## Phase 7: 部署
 - [x] 代码推送到 GitHub → https://github.com/teamo-lab/teamo-v1
@@ -52,6 +74,7 @@
 - [x] 前端构建成功（nuxt build）✅ 2026-03-15
 - [x] Playwright 本地测试 — 6/6 PASS ✅ 2026-03-15
 - [x] 后端服务冒烟测试 — 6/6 PASS ✅ 2026-03-15
+- [x] Playwright 真实 E2E: "hi" → Claude 回复 → 前端渲染 ✅ 2026-03-15
 - [ ] 用户审批发布到生产
 
 ## Phase 9: Dashboard & 可观测体系

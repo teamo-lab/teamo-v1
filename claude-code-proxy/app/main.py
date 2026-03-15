@@ -21,10 +21,22 @@ from app.proxy import (
     stream_check,
 )
 
+from app.scheduler import start_scheduler, stop_scheduler
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Claude Code Proxy", version="1.0.0")
+
+
+@app.on_event("startup")
+async def startup_event():
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    stop_scheduler()
 
 
 def _get_user_id(headers: dict) -> str:

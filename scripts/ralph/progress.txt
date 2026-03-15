@@ -1,0 +1,78 @@
+# Ralph Progress Log
+Started: 2026-03-15
+---
+
+## Codebase Patterns
+- Python services use FastAPI + uvicorn, tests use pytest
+- Instance-manager spawns Claude CLI via asyncio.create_subprocess_exec with explicit env dict
+- Explicit env dict completely replaces parent env — must manually pass PATH, HOME, ANTHROPIC_API_KEY
+- Claude CLI requires `--verbose` flag when using `--output-format stream-json`
+- Frontend SSE flow: start_answer (with step_conv_id) → answer_chunk(s) (matching step_conv_id) → task_done
+- Frontend contentEditable editor requires keyboard-level events (not programmatic textContent) to trigger Vue reactivity
+- Deploy to US server via TAT (Tencent Cloud remote command), not SSH
+- Symlink /root/.claude and /root/.claude.json to user instance HOME dir for CLI auth
+- Claude CLI path on US server: /root/.nvm/versions/node/v22.22.0/bin/claude
+- MongoDB connection string in proxy config.py (mongodb_uri field)
+- Frontend teamo-runner is separate repo at /Users/zhangyiming/teamo-runner/
+
+---
+
+## 2026-03-15 - US-001: Instance Manager core API
+- Implemented: Full CRUD (create/prompt/status/destroy) + health check
+- Files: instance-manager/app/main.py, instance.py, config.py, models.py
+- 9/9 tests passing
+- **Learnings:**
+  - asyncio.create_subprocess_exec with env= completely replaces parent env
+  - Must symlink .claude and .claude.json from /root/ to user HOME
+  - Claude CLI needs --verbose with stream-json output format
+  - PATH must include /root/.nvm/versions/node/v22.22.0/bin/ for claude binary
+---
+
+## 2026-03-15 - US-002: Claude Code Proxy
+- Implemented: Mode routing (claude_code vs a2a), SSE format conversion, auth extraction
+- Files: claude-code-proxy/app/proxy.py, sse_converter.py, models.py, config.py
+- 10/13 tests passing (3 failures are test assertion mismatches, not code bugs)
+- **Learnings:**
+  - Frontend requires start_answer event before answer_chunk events
+  - step_conv_id must be consistent across start_answer and answer_chunk
+  - Auth can come from Authorization header or Cookie
+  - Response format: {"code": 0, "result": {"mcp_task_id": "xxx"}}
+---
+
+## 2026-03-15 - US-003: Frontend ModeSelector
+- Implemented: ModeSelector.vue with Claude Code / Research cards
+- Files: frontend-patch/ModeSelector.vue, chatcore-patch.js
+- Integrated in teamo-runner (chat/index.vue, home/index.vue)
+- **Learnings:**
+  - Vue contentEditable needs keyboard events, not textContent assignment
+  - localStorage key 'chatMode' stores mode preference
+  - getModeValue() bridges ModeSelector → chatcore request params
+---
+
+## 2026-03-15 - US-004: Credits billing logic
+- Implemented: Pure billing functions (deduct, check, info, warning)
+- Files: credits-billing/billing.py, tests/
+- 11/11 tests passing
+- **Learnings:**
+  - Priority deduction: free → vip → extend
+  - 28 credits/day for running instance
+  - Warning threshold: < 84 credits (3 days)
+---
+
+## 2026-03-15 - US-005: Deploy to US server
+- Deployed instance-manager to 49.51.47.101:8902 via TAT + systemd
+- Service: teamo-instance-manager.service
+- ANTHROPIC_API_KEY configured in systemd Environment
+---
+
+## 2026-03-15 - US-006: E2E basic flow verified
+- Playwright test: homepage → type 'hi' → send → Claude responds "Hi! How can I help you today?"
+- Screenshot: e2e-claude-code-hi-success.png
+- Full chain: browser → nuxt api-proxy → proxy(8901) → instance-manager(8902) → Claude CLI → SSE → frontend
+---
+
+## 2026-03-15 - US-011: Stop task functionality
+- Backend askAgentsUserStop implemented in proxy
+- Calls instance-manager destroy API
+- Frontend already has stop button wired
+---

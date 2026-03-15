@@ -8,11 +8,12 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import AsyncIterator, Callable, Optional
+from typing import AsyncIterator, Optional
 
 import httpx
 
 from app.config import CONFIG
+from app.history import save_conversation
 from app.models import FrontendSSEEvent
 from app.sse_converter import convert_instance_sse
 
@@ -130,6 +131,15 @@ async def stream_check(
 
     user_id = task["user_id"]
     query = task["query"]
+    session_group_id = task.get("session_group_id", "")
+    step_conv_id = uuid.uuid4().hex[:12]
+
+    # Frontend requires start_answer before answer_chunk events
+    yield FrontendSSEEvent.step(
+        "start_answer", {"step_conv_id": step_conv_id, "message": ""}
+    )
+
+    response_chunks: list[str] = []
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
@@ -141,12 +151,36 @@ async def stream_check(
                 async for raw_line in resp.aiter_lines():
                     if not raw_line:
                         continue
-                    for converted in convert_instance_sse(raw_line):
+                    for converted in convert_instance_sse(
+                        raw_line, step_conv_id=step_conv_id
+                    ):
                         yield converted
+                    # Accumulate text content for history
+                    if raw_line.startswith("data: "):
+                        try:
+                            evt = json.loads(raw_line[6:])
+                            if evt.get("type") == "text":
+                                response_chunks.append(evt.get("content", ""))
+                        except (json.JSONDecodeError, KeyError):
+                            pass
     except httpx.HTTPError as exc:
         logger.exception("Stream error for task %s", task_id)
         yield FrontendSSEEvent.step("error", {"message": str(exc)})
         yield FrontendSSEEvent.task_done()
+
+    # Save conversation history to MongoDB
+    full_response = "".join(response_chunks)
+    if full_response:
+        try:
+            await save_conversation(
+                conv_id=task_id,
+                session_group_id=session_group_id,
+                username=user_id,
+                query=query,
+                response=full_response,
+            )
+        except Exception:
+            logger.exception("Failed to save history for task %s", task_id)
 
 
 async def handle_user_stop(

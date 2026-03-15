@@ -40,10 +40,10 @@ Type=simple
 User=root
 WorkingDirectory=/opt/teamo/instance-manager/instance-manager
 Environment=INSTANCE_BASE_DIR=/opt/teamo/instances
-Environment=CLAUDE_BIN=/usr/local/bin/claude
+Environment=CLAUDE_BIN=/root/.nvm/versions/node/v22.22.0/bin/claude
 Environment=CLAUDE_TIMEOUT_SECONDS=300
-Environment=PORT=8900
-ExecStart=/opt/teamo/instance-manager/instance-manager/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8900
+Environment=PORT=8902
+ExecStart=/opt/teamo/instance-manager/instance-manager/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8902
 Restart=always
 RestartSec=5
 

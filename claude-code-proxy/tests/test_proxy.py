@@ -6,7 +6,7 @@ stop, history, auth, auto-create.
 """
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -19,30 +19,21 @@ from app.sse_converter import convert_instance_sse
 # ============================================================
 class TestModeRouting:
     def test_claude_code_mode_routes_to_instance(self, client):
-        """mode=claude_code should call instance-manager, not MCP."""
-        mock_response = httpx.Response(200, json={"status": "ok"})
+        """mode=claude_code should create a task and return task_id.
 
-        with patch("app.proxy.httpx.AsyncClient") as MockClient:
-            mock_instance = AsyncMock()
-            mock_instance.post = AsyncMock(return_value=mock_response)
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock(return_value=False)
-            MockClient.return_value = mock_instance
-
-            resp = client.post(
-                "/api/engine/askAgents",
-                json={"query": "hello", "mode": "claude_code"},
-                headers={"Authorization": "Bearer user123"},
-            )
+        Note: askAgents only creates a task entry; the actual instance-manager
+        call happens during askAgentsCheck (stream_check).
+        """
+        resp = client.post(
+            "/api/engine/askAgents",
+            json={"query": "hello", "mode": "claude_code"},
+            headers={"Authorization": "Bearer user123"},
+        )
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["code"] == 0
-        assert data["mcp_task_id"] != ""
-        # Verify instance-manager was called
-        mock_instance.post.assert_called_once()
-        call_url = mock_instance.post.call_args[0][0]
-        assert "/api/instance/prompt" in call_url
+        assert data["result"]["mcp_task_id"] != ""
 
 
 # ============================================================
@@ -50,10 +41,15 @@ class TestModeRouting:
 # ============================================================
 class TestResearchModeRouting:
     def test_a2a_mode_does_not_call_instance(self, client):
-        """mode=a2a should NOT call instance-manager."""
+        """mode=a2a should forward to legacy backend, not instance-manager."""
+        legacy_response = httpx.Response(200, json={"code": 0, "result": {}})
+
         with patch("app.proxy.httpx.AsyncClient") as MockClient:
-            mock_instance = AsyncMock()
-            MockClient.return_value = mock_instance
+            mock_client = AsyncMock()
+            mock_client.request = AsyncMock(return_value=legacy_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_client
 
             resp = client.post(
                 "/api/engine/askAgents",
@@ -62,8 +58,10 @@ class TestResearchModeRouting:
             )
 
         assert resp.status_code == 200
-        # No instance-manager call for a2a mode
-        mock_instance.post.assert_not_called()
+        # Legacy backend was called via .request(), not instance-manager
+        mock_client.request.assert_called_once()
+        call_url = mock_client.request.call_args[0][1]
+        assert "/api/engine/askAgents" in call_url
 
 
 # ============================================================
@@ -161,7 +159,68 @@ class TestUserStop:
 # ============================================================
 # Test 6: Conversation history save (mock)
 # ============================================================
-# Integration test — requires MongoDB; covered in integration tests
+class TestConversationHistory:
+    def test_history_saved_after_stream(self, client):
+        """After streaming, conversation should be saved to MongoDB."""
+        from app.proxy import _tasks
+
+        # Create a task first
+        resp = client.post(
+            "/api/engine/askAgents",
+            json={"query": "test query", "mode": "claude_code"},
+            headers={"Authorization": "Bearer histuser"},
+        )
+        task_id = resp.json()["result"]["mcp_task_id"]
+
+        # Mock the instance-manager SSE stream
+        sse_lines = [
+            'data: {"type":"text","content":"Hello"}\n\n',
+            'data: {"type":"text","content":" world"}\n\n',
+            'data: {"type":"done","session_id":"s1"}\n\n',
+        ]
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.aiter_lines = AsyncMock(
+            return_value=AsyncMock(__aiter__=lambda self: self, __anext__=None)
+        )
+
+        async def fake_aiter():
+            for line in sse_lines:
+                yield line.strip()
+
+        with patch("app.proxy.httpx.AsyncClient") as MockClient, \
+             patch("app.proxy.save_conversation") as mock_save:
+            mock_client = AsyncMock()
+            mock_stream_ctx = AsyncMock()
+
+            mock_stream_response = AsyncMock()
+            mock_stream_response.aiter_lines = lambda: fake_aiter()
+
+            mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_stream_response)
+            mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_client.stream = lambda *a, **kw: mock_stream_ctx
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_client
+
+            resp = client.post(
+                "/api/engine/askAgentsCheck",
+                json={"mcp_task_id": task_id, "mode": "claude_code"},
+                headers={"Authorization": "Bearer histuser"},
+            )
+
+        assert resp.status_code == 200
+        # Verify save_conversation was called with accumulated text
+        mock_save.assert_called_once()
+        call_kwargs = mock_save.call_args
+        assert call_kwargs[1]["query"] == "test query" or \
+               (len(call_kwargs[0]) > 3 and call_kwargs[0][3] == "test query")
+        # Check response text includes both chunks
+        args = call_kwargs[1] if call_kwargs[1] else {}
+        if "response" in args:
+            assert "Hello" in args["response"]
+            assert "world" in args["response"]
 
 
 # ============================================================
@@ -195,24 +254,92 @@ class TestAuthCheck:
 # ============================================================
 class TestAutoCreate:
     def test_ask_agents_creates_instance_if_needed(self, client):
-        """askAgents with claude_code mode should auto-create and return task_id."""
-        mock_response = httpx.Response(200, json={"status": "ok"})
+        """askAgents with claude_code mode should create task entry and return task_id.
 
-        with patch("app.proxy.httpx.AsyncClient") as MockClient:
-            mock_instance = AsyncMock()
-            mock_instance.post = AsyncMock(return_value=mock_response)
-            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
-            mock_instance.__aexit__ = AsyncMock(return_value=False)
-            MockClient.return_value = mock_instance
-
-            resp = client.post(
-                "/api/engine/askAgents",
-                json={"query": "build an app", "mode": "claude_code"},
-                headers={"Authorization": "Bearer newuser"},
-            )
+        Instance auto-creation happens when stream_check calls instance-manager
+        /api/instance/prompt (instance-manager creates on first prompt).
+        """
+        resp = client.post(
+            "/api/engine/askAgents",
+            json={"query": "build an app", "mode": "claude_code"},
+            headers={"Authorization": "Bearer newuser"},
+        )
 
         data = resp.json()
         assert data["code"] == 0
-        assert data["mcp_task_id"] != ""
-        # The instance-manager /prompt endpoint auto-creates
-        mock_instance.post.assert_called_once()
+        assert data["result"]["mcp_task_id"] != ""
+
+        # Verify task was stored internally
+        from app.proxy import _tasks
+        task_id = data["result"]["mcp_task_id"]
+        assert task_id in _tasks
+        assert _tasks[task_id]["query"] == "build an app"
+
+
+# ============================================================
+# Test 9: Daily billing scheduler
+# ============================================================
+class TestBillingScheduler:
+    @pytest.mark.asyncio
+    async def test_billing_deducts_and_stops(self):
+        """Daily billing should deduct credits and stop instances with insufficient balance."""
+        from app.scheduler import _run_daily_billing
+
+        # Mock instance-manager listing 2 instances
+        instances_response = httpx.Response(200, json=[
+            {"user_id": "user_rich", "status": "running"},
+            {"user_id": "user_poor", "status": "running"},
+        ])
+
+        # Mock MongoDB users
+        user_rich = {
+            "username": "user_rich",
+            "remain_free_battery": 50,
+            "remain_vip_battery": 50,
+            "remain_extend_battery": 0,
+        }
+        user_poor = {
+            "username": "user_poor",
+            "remain_free_battery": 10,
+            "remain_vip_battery": 0,
+            "remain_extend_battery": 0,
+        }
+
+        mock_db = MagicMock()
+        mock_users = AsyncMock()
+        mock_db.users = mock_users
+
+        async def find_one(query):
+            name = query.get("username")
+            if name == "user_rich":
+                return user_rich.copy()
+            if name == "user_poor":
+                return user_poor.copy()
+            return None
+
+        mock_users.find_one = find_one
+        mock_users.update_one = AsyncMock()
+
+        # Mock instance-manager destroy
+        destroy_response = httpx.Response(200, json={"status": "stopped"})
+
+        with patch("app.scheduler.get_db", return_value=mock_db), \
+             patch("app.scheduler.httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=instances_response)
+            mock_client.post = AsyncMock(return_value=destroy_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_client
+
+            summary = await _run_daily_billing()
+
+        assert summary["billed"] == 1  # user_rich
+        assert summary["stopped"] == 1  # user_poor
+        # Verify credits were deducted for rich user
+        mock_users.update_one.assert_called_once()
+        update_call = mock_users.update_one.call_args
+        assert update_call[0][0] == {"username": "user_rich"}
+        set_fields = update_call[0][1]["$set"]
+        # 50 free - 28 = 22 remaining free
+        assert set_fields["remain_free_battery"] == 22

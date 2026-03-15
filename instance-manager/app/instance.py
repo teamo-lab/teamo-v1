@@ -7,6 +7,7 @@ non-shell subprocess invocation - equivalent to Node.js execFile.
 import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,19 @@ class InstanceManager:
 
         home_dir = CONFIG.instance_base_dir / user_id
         home_dir.mkdir(parents=True, exist_ok=True)
+
+        # Symlink .claude dir and .claude.json so CLI can find OAuth credentials
+        for name, root_path in [
+            (".claude", Path("/root/.claude")),
+            (".claude.json", Path("/root/.claude.json")),
+        ]:
+            target = home_dir / name
+            if root_path.exists() and not target.exists():
+                try:
+                    target.symlink_to(root_path)
+                    logger.info("Symlinked %s for user %s", name, user_id)
+                except OSError as exc:
+                    logger.warning("Failed to symlink %s: %s", name, exc)
 
         inst = ManagedInstance(user_id, str(home_dir))
         await inst.start()
@@ -115,14 +129,26 @@ class ManagedInstance:
             yield _sse_line(SSEEventType.error, {"message": "Instance not running"})
             return
 
-        cmd = [CONFIG.claude_bin, "-p", prompt, "--output-format", "stream-json"]
+        cmd = [CONFIG.claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
         if CONFIG.claude_model:
             cmd.extend(["--model", CONFIG.claude_model])
 
+        # Build PATH: include directory of claude binary so node/npm are findable
+        base_path = "/usr/local/bin:/usr/bin:/bin"
+        claude_path = Path(CONFIG.claude_bin)
+        if claude_path.is_absolute():
+            claude_dir = str(claude_path.parent)
+            if claude_dir not in base_path.split(":"):
+                base_path = f"{claude_dir}:{base_path}"
+
         env = {
             "HOME": self.info.home_dir,
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "PATH": base_path,
         }
+        # Pass through ANTHROPIC_API_KEY so Claude CLI can authenticate
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
         if cwd is None:
             cwd = self.info.home_dir
 
